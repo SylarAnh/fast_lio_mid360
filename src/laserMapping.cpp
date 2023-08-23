@@ -943,7 +943,7 @@ int main(int argc, char** argv)
     nh.param<string>("common/lid_topic",lid_topic,"/livox/lidar");
     nh.param<string>("common/imu_topic", imu_topic,"/livox/imu");
     nh.param<string>("common/cloud_deskewed_topic",cloud_deskewed_topic,"/livox/lidar");
-    nh.param<string>("common/odometry_topic", odometry_topic,"/livox/imu");
+    nh.param<string>("common/odometry_topic", odometry_topic,"/fastlio_odom");
     nh.param<bool>("common/time_sync_en", time_sync_en, false);
     nh.param<double>("filter_size_corner",filter_size_corner_min,0.5);
     nh.param<double>("filter_size_surf",filter_size_surf_min,0.5);
@@ -996,7 +996,7 @@ int main(int argc, char** argv)
     Lidar_T_wrt_IMU<<VEC_FROM_ARRAY(extrinT);
     Lidar_R_wrt_IMU<<MAT_FROM_ARRAY(extrinR);
     IMU_T_wrt_Center<<VEC_FROM_ARRAY(initT);
-    IMU_R_wrt_Center<<VEC_FROM_ARRAY(initR);
+    IMU_R_wrt_Center<<MAT_FROM_ARRAY(initR);
     p_imu->set_deskew(deskew_enabled);
     p_imu->set_extrinsic(Lidar_T_wrt_IMU, Lidar_R_wrt_IMU);
     p_imu->set_gyr_cov(V3D(gyr_cov, gyr_cov, gyr_cov));
@@ -1044,7 +1044,7 @@ int main(int argc, char** argv)
     ros::Publisher pubOdomAftMapped = nh.advertise<nav_msgs::Odometry> 
             (odometry_topic, 100000);
     ros::Publisher pubOdomAftMappedCenter = nh.advertise<nav_msgs::Odometry> 
-            (odometry_topic + "In_Center", 100000);
+            (odometry_topic + "_In_Center", 100000);
     ros::Publisher pubPath          = nh.advertise<nav_msgs::Path> 
             ("path", 100000);
 //------------------------------------------------------------------------------------------------------
@@ -1160,7 +1160,7 @@ int main(int argc, char** argv)
             double t_update_end = omp_get_wtime();
 
             /******* Publish odometry *******/
-            publish_odometry(pubOdomAftMapped);
+            // publish_odometry(pubOdomAftMapped);
             publish_odometry_in_center(pubOdomAftMappedCenter);
 
             /*** add the feature points to map kdtree ***/

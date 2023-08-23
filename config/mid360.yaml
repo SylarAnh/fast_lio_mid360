@@ -5,6 +5,8 @@ common:
     # imu_topic:  "/livox/imu_192_168_1_152" 
     lid_topic:  "/livox/lidar_192_168_1_146"
     imu_topic:  "/livox/imu_192_168_1_146"
+    cloud_deskewed_topic: "/fastlio_pc"
+    odometry_topic: "/fastlio_odom"
     time_sync_en: false         # ONLY turn on when external time synchronization is really not possible
 
 preprocess:
@@ -27,7 +29,11 @@ mapping:
     init_T: [ 0.298375, -0.00120827, 0.131974 ]
     init_R: [ 0.460357,    0.459737,    0.758802,
               -0.705492,    0.708506,  -0.0012503, 
-              -0.538575,   -0.535138,    0.651286 ]
+              -0.538575,   -0.535138,    0.651286]
+    # init_T: [ -0.011, -0.0234, 0.044 ]
+    # init_R: [ 0.9999161, 0.0026676,  0.0126707,
+    #                -0.0025826, 0.9999741, -0.0067201,
+    #                -0.0126883, 0.0066868,  0.9998971]
 
 publish:
     path_en:  true
