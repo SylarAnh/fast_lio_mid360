@@ -95,7 +95,7 @@ mutex mtx_buffer;
 condition_variable sig_buffer;
 
 string root_dir = ROOT_DIR;
-string map_file_path, lid_topic, imu_topic;
+string map_file_path, lid_topic, imu_topic, cloud_deskewed_topic, odometry_topic;
 
 double res_mean_last = 0.05, total_residual = 0.0;
 double last_timestamp_lidar = 0, last_timestamp_imu = -1.0;
@@ -105,7 +105,7 @@ double cube_len = 0, HALF_FOV_COS = 0, FOV_DEG = 0, total_distance = 0, lidar_en
 int    effct_feat_num = 0, time_log_counter = 0, scan_count = 0, publish_count = 0;
 int    iterCount = 0, feats_down_size = 0, NUM_MAX_ITERATIONS = 0, laserCloudValidNum = 0, pcd_save_interval = -1, pcd_index = 0;
 bool   point_selected_surf[100000] = {0};
-bool   lidar_pushed, flg_first_scan = true, flg_exit = false, flg_EKF_inited;
+bool   lidar_pushed, flg_first_scan = true, flg_exit = false, flg_EKF_inited, deskew_enabled;
 bool   scan_pub_en = false, dense_pub_en = false, scan_body_pub_en = false;
 
 vector<vector<int>>  pointSearchInd_surf; 
@@ -649,21 +649,30 @@ void publish_frame_body(const ros::Publisher & pubLaserCloudFull_body)
     publish_count -= PUBFRAME_PERIOD;
 }
 
-//void publish_effect_world(const ros::Publisher & pubLaserCloudEffect)
-//{
-//    PointCloudXYZI::Ptr laserCloudWorld( \
-//                    new PointCloudXYZI(effct_feat_num, 1));
-//    for (int i = 0; i < effct_feat_num; i++)
-//    {
-//        IntensitypointBodyToWorld(&laserCloudOri->points[i], \
-//                            &laserCloudWorld->points[i]);
-//    }
-//    sensor_msgs::PointCloud2 laserCloudFullRes3;
-//    pcl::toROSMsg(*laserCloudWorld, laserCloudFullRes3);
-//    laserCloudFullRes3.header.stamp = ros::Time().fromSec(lidar_end_time);
-//    laserCloudFullRes3.header.frame_id = "camera_init";
-//    pubLaserCloudEffect.publish(laserCloudFullRes3);
-//}
+void publish_deskew_local(const ros::Publisher & pubLaserCloudDeskew)
+{
+   sensor_msgs::PointCloud2 laserCloudDeskew;
+   pcl::toROSMsg(*feats_undistort, laserCloudDeskew);
+   laserCloudDeskew.header.stamp = ros::Time().fromSec(lidar_end_time);
+   laserCloudDeskew.header.frame_id = "body";
+   pubLaserCloudDeskew.publish(laserCloudDeskew);
+}
+
+void publish_effect_world(const ros::Publisher & pubLaserCloudEffect)
+{
+   PointCloudXYZI::Ptr laserCloudWorld( \
+                   new PointCloudXYZI(effct_feat_num, 1));
+   for (int i = 0; i < effct_feat_num; i++)
+   {
+       IntensitypointBodyToWorld(&laserCloudOri->points[i], \
+                           &laserCloudWorld->points[i]);
+   }
+   sensor_msgs::PointCloud2 laserCloudFullRes3;
+   pcl::toROSMsg(*laserCloudWorld, laserCloudFullRes3);
+   laserCloudFullRes3.header.stamp = ros::Time().fromSec(lidar_end_time);
+   laserCloudFullRes3.header.frame_id = "camera_init";
+   pubLaserCloudEffect.publish(laserCloudFullRes3);
+}
 
 void publish_map(const ros::Publisher & pubLaserCloudMap)
 {
@@ -869,6 +878,8 @@ int main(int argc, char** argv)
     nh.param<string>("map_file_path",map_file_path,"");
     nh.param<string>("common/lid_topic",lid_topic,"/livox/lidar");
     nh.param<string>("common/imu_topic", imu_topic,"/livox/imu");
+    nh.param<string>("common/cloud_deskewed_topic",cloud_deskewed_topic,"/livox/lidar");
+    nh.param<string>("common/odometry_topic", odometry_topic,"/livox/imu");
     nh.param<bool>("common/time_sync_en", time_sync_en, false);
     nh.param<double>("filter_size_corner",filter_size_corner_min,0.5);
     nh.param<double>("filter_size_surf",filter_size_surf_min,0.5);
@@ -887,6 +898,7 @@ int main(int argc, char** argv)
     nh.param<int>("preprocess/scan_rate", p_pre->SCAN_RATE, 10);
     nh.param<int>("point_filter_num", p_pre->point_filter_num, 2);
     nh.param<bool>("feature_extract_enable", p_pre->feature_enabled, false);
+    nh.param<bool>("deskew_enabled", deskew_enabled, true);
     nh.param<bool>("runtime_pos_log_enable", runtime_pos_log, 0);
     nh.param<bool>("mapping/extrinsic_est_en", extrinsic_est_en, true);
     nh.param<bool>("pcd_save/pcd_save_en", pcd_save_en, false);
@@ -917,6 +929,7 @@ int main(int argc, char** argv)
 
     Lidar_T_wrt_IMU<<VEC_FROM_ARRAY(extrinT);
     Lidar_R_wrt_IMU<<MAT_FROM_ARRAY(extrinR);
+    p_imu->set_deskew(deskew_enabled);
     p_imu->set_extrinsic(Lidar_T_wrt_IMU, Lidar_R_wrt_IMU);
     p_imu->set_gyr_cov(V3D(gyr_cov, gyr_cov, gyr_cov));
     p_imu->set_acc_cov(V3D(acc_cov, acc_cov, acc_cov));
@@ -951,17 +964,19 @@ int main(int argc, char** argv)
     image_transport::Subscriber sub_img = it.subscribe("camera/image_raw", 200000, img_cbk);
 
     ros::Publisher pubLaserCloudFull = nh.advertise<sensor_msgs::PointCloud2>
-            ("/cloud_registered", 100000); /** active **/
+            ("cloud_registered", 100000); /** active **/
     ros::Publisher pubLaserCloudFull_body = nh.advertise<sensor_msgs::PointCloud2>
-            ("/cloud_registered_body", 100000);
+            ("cloud_registered_body", 100000);
     ros::Publisher pubLaserCloudEffect = nh.advertise<sensor_msgs::PointCloud2>
-            ("/cloud_effected", 100000);
+            ("cloud_effected", 100000);
+    ros::Publisher pubLaserCloudDeskew = nh.advertise<sensor_msgs::PointCloud2>
+            (cloud_deskewed_topic, 100000);
     ros::Publisher pubLaserCloudMap = nh.advertise<sensor_msgs::PointCloud2>
-            ("/Laser_map", 100000);
+            ("Laser_map", 100000);
     ros::Publisher pubOdomAftMapped = nh.advertise<nav_msgs::Odometry> 
-            ("/Odometry", 100000);
+            (odometry_topic, 100000);
     ros::Publisher pubPath          = nh.advertise<nav_msgs::Path> 
-            ("/path", 100000);
+            ("path", 100000);
 //------------------------------------------------------------------------------------------------------
     static int count; /** count of the publish func **/
     signal(SIGINT, SigHandle);
@@ -1098,6 +1113,7 @@ int main(int argc, char** argv)
             if (scan_pub_en || pcd_save_en)      publish_frame_world(pubLaserCloudFull);
             if (scan_pub_en && scan_body_pub_en) publish_frame_body(pubLaserCloudFull_body);
             // publish_effect_world(pubLaserCloudEffect);
+            publish_deskew_local(pubLaserCloudDeskew);
             // publish_map(pubLaserCloudMap);
 
             /*** Debug variables ***/
