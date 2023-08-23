@@ -113,6 +113,8 @@ vector<BoxPointType> cub_needrm;
 vector<PointVector>  Nearest_Points; 
 vector<double>       extrinT(3, 0.0);
 vector<double>       extrinR(9, 0.0);
+vector<double>       initT(3, 0.0);
+vector<double>       initR(9, 0.0);
 deque<double>                     time_buffer;
 deque<PointCloudXYZI::Ptr>        lidar_buffer;
 deque<sensor_msgs::Imu::ConstPtr> imu_buffer;
@@ -137,6 +139,8 @@ V3D euler_cur;
 V3D position_last(Zero3d);
 V3D Lidar_T_wrt_IMU(Zero3d);
 M3D Lidar_R_wrt_IMU(Eye3d);
+V3D IMU_T_wrt_Center(Zero3d);
+M3D IMU_R_wrt_Center(Eye3d);
 
 /*** EKF inputs and output ***/
 MeasureGroup Measures;
@@ -696,6 +700,32 @@ void set_posestamp(T & out)
     out.pose.orientation.w = geoQuat.w;
 }
 
+template<typename T>
+void set_posestamp_in_center(T & out)
+{
+    cout << "-----set_posestamp-----" << endl;
+    Eigen::Vector3d pos(state_point.pos(0), state_point.pos(1), state_point.pos(2));
+    Eigen::Quaterniond quat(geoQuat.w, geoQuat.x, geoQuat.y, geoQuat.z);
+    Eigen::Matrix4d odom = Eigen::Matrix4d::Identity();
+    Eigen::Matrix4d t_imu2center = Eigen::Matrix4d::Identity();
+    Eigen::Matrix4d odom_in_center = Eigen::Matrix4d::Identity();
+    odom.block<3,3>(0,0) = quat.toRotationMatrix();
+    odom.block<3,1>(0,3) = pos;
+    t_imu2center.block<3,3>(0,0) = IMU_R_wrt_Center;
+    t_imu2center.block<3,1>(0,3) = IMU_T_wrt_Center;
+    odom_in_center = t_imu2center * odom * t_imu2center.inverse();
+    Eigen::Quaterniond geoQuat_in_center(odom_in_center.block<3,3>(0,0));
+    Eigen::Vector3d pos_in_center(odom_in_center.block<3,1>(0,3));
+
+    out.pose.position.x = pos_in_center(0);
+    out.pose.position.y = pos_in_center(1);
+    out.pose.position.z = pos_in_center(2);
+    out.pose.orientation.x = geoQuat_in_center.x();
+    out.pose.orientation.y = geoQuat_in_center.y();
+    out.pose.orientation.z = geoQuat_in_center.z();
+    out.pose.orientation.w = geoQuat_in_center.w();
+}
+
 void publish_odometry(const ros::Publisher & pubOdomAftMapped)
 {
     cout << "-----publish_odometry-----" << endl;
@@ -703,6 +733,40 @@ void publish_odometry(const ros::Publisher & pubOdomAftMapped)
     odomAftMapped.child_frame_id = "body";
     odomAftMapped.header.stamp = ros::Time().fromSec(lidar_end_time);// ros::Time().fromSec(lidar_end_time);
     set_posestamp(odomAftMapped.pose);
+    pubOdomAftMapped.publish(odomAftMapped);
+    auto P = kf.get_P();
+    for (int i = 0; i < 6; i ++)
+    {
+        int k = i < 3 ? i + 3 : i - 3;
+        odomAftMapped.pose.covariance[i*6 + 0] = P(k, 3);
+        odomAftMapped.pose.covariance[i*6 + 1] = P(k, 4);
+        odomAftMapped.pose.covariance[i*6 + 2] = P(k, 5);
+        odomAftMapped.pose.covariance[i*6 + 3] = P(k, 0);
+        odomAftMapped.pose.covariance[i*6 + 4] = P(k, 1);
+        odomAftMapped.pose.covariance[i*6 + 5] = P(k, 2);
+    }
+
+    static tf::TransformBroadcaster br;
+    tf::Transform                   transform;
+    tf::Quaternion                  q;
+    transform.setOrigin(tf::Vector3(odomAftMapped.pose.pose.position.x, \
+                                    odomAftMapped.pose.pose.position.y, \
+                                    odomAftMapped.pose.pose.position.z));
+    q.setW(odomAftMapped.pose.pose.orientation.w);
+    q.setX(odomAftMapped.pose.pose.orientation.x);
+    q.setY(odomAftMapped.pose.pose.orientation.y);
+    q.setZ(odomAftMapped.pose.pose.orientation.z);
+    transform.setRotation( q );
+    br.sendTransform( tf::StampedTransform( transform, odomAftMapped.header.stamp, "camera_init", "body" ) );
+}
+
+void publish_odometry_in_center(const ros::Publisher & pubOdomAftMapped)
+{
+    cout << "-----publish_odometry-----" << endl;
+    odomAftMapped.header.frame_id = "camera_init";
+    odomAftMapped.child_frame_id = "body";
+    odomAftMapped.header.stamp = ros::Time().fromSec(lidar_end_time);// ros::Time().fromSec(lidar_end_time);
+    set_posestamp_in_center(odomAftMapped.pose);
     pubOdomAftMapped.publish(odomAftMapped);
     auto P = kf.get_P();
     for (int i = 0; i < 6; i ++)
@@ -905,6 +969,8 @@ int main(int argc, char** argv)
     nh.param<int>("pcd_save/interval", pcd_save_interval, -1);
     nh.param<vector<double>>("mapping/extrinsic_T", extrinT, vector<double>());
     nh.param<vector<double>>("mapping/extrinsic_R", extrinR, vector<double>());
+    nh.param<vector<double>>("mapping/init_T", initT, vector<double>());
+    nh.param<vector<double>>("mapping/init_R", initR, vector<double>());
     cout<<"p_pre->lidar_type "<<p_pre->lidar_type<<endl;
     
     path.header.stamp    = ros::Time::now();
@@ -929,6 +995,8 @@ int main(int argc, char** argv)
 
     Lidar_T_wrt_IMU<<VEC_FROM_ARRAY(extrinT);
     Lidar_R_wrt_IMU<<MAT_FROM_ARRAY(extrinR);
+    IMU_T_wrt_Center<<VEC_FROM_ARRAY(initT);
+    IMU_R_wrt_Center<<VEC_FROM_ARRAY(initR);
     p_imu->set_deskew(deskew_enabled);
     p_imu->set_extrinsic(Lidar_T_wrt_IMU, Lidar_R_wrt_IMU);
     p_imu->set_gyr_cov(V3D(gyr_cov, gyr_cov, gyr_cov));
@@ -975,6 +1043,8 @@ int main(int argc, char** argv)
             ("Laser_map", 100000);
     ros::Publisher pubOdomAftMapped = nh.advertise<nav_msgs::Odometry> 
             (odometry_topic, 100000);
+    ros::Publisher pubOdomAftMappedCenter = nh.advertise<nav_msgs::Odometry> 
+            (odometry_topic + "In_Center", 100000);
     ros::Publisher pubPath          = nh.advertise<nav_msgs::Path> 
             ("path", 100000);
 //------------------------------------------------------------------------------------------------------
@@ -1091,6 +1161,7 @@ int main(int argc, char** argv)
 
             /******* Publish odometry *******/
             publish_odometry(pubOdomAftMapped);
+            publish_odometry_in_center(pubOdomAftMappedCenter);
 
             /*** add the feature points to map kdtree ***/
             t3 = omp_get_wtime();
