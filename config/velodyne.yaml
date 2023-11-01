@@ -1,6 +1,6 @@
 common:
-    lid_topic:  "/velodyne_points"
-    imu_topic:  "/imu/data"
+    lid_topic:  "/unilidar/cloud"
+    imu_topic:  "/unilidar/imu"
     time_sync_en: false         # ONLY turn on when external time synchronization is really not possible
     
 preprocess:
@@ -8,7 +8,8 @@ preprocess:
     scan_line: 32
     scan_rate: 10                # only need to be set for velodyne, unit: Hz,
     timestamp_unit: 2            # the unit of time/t field in the PointCloud2 rostopic: 0-second, 1-milisecond, 2-microsecond, 3-nanosecond.
-    blind: 2
+    blind: 0.5
+    
 
 mapping:
     acc_cov: 0.1
