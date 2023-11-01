@@ -44,6 +44,7 @@ class ImuProcess
   void set_extrinsic(const V3D &transl, const M3D &rot);
   void set_extrinsic(const V3D &transl);
   void set_extrinsic(const MD(4,4) &T);
+  void set_deskew(const bool &flag);
   void set_gyr_cov(const V3D &scaler);
   void set_acc_cov(const V3D &scaler);
   void set_gyr_bias_cov(const V3D &b_g);
@@ -59,6 +60,7 @@ class ImuProcess
   V3D cov_bias_gyr;
   V3D cov_bias_acc;
   double first_lidar_time;
+  bool deskew_enabled;
 
  private:
   void IMU_init(const MeasureGroup &meas, esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state, int &N);
@@ -114,6 +116,11 @@ void ImuProcess::Reset()
   IMUpose.clear();
   last_imu_.reset(new sensor_msgs::Imu());
   cur_pcl_un_.reset(new PointCloudXYZI());
+}
+
+void ImuProcess::set_deskew(const bool &flag)
+{
+  deskew_enabled = flag;
 }
 
 void ImuProcess::set_extrinsic(const MD(4,4) &T)
@@ -221,6 +228,8 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, esekfom::esekf<state_ikf
   const double &pcl_beg_time = meas.lidar_beg_time;
   const double &pcl_end_time = meas.lidar_end_time;
   
+  // std::cout << "times" << imu_beg_time << ", " << imu_end_time << ", " << pcl_beg_time << ", " << pcl_end_time << std::endl;
+
   /*** sort point clouds by offset time ***/
   pcl_out = *(meas.lidar);
   sort(pcl_out.points.begin(), pcl_out.points.end(), time_list);
@@ -296,6 +305,8 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, esekfom::esekf<state_ikf
   last_imu_ = meas.imu.back();
   last_lidar_end_time_ = pcl_end_time;
 
+  if (deskew_enabled == false) return;
+  std::cout << "lidar_deskew" << std::endl;
   /*** undistort each lidar point (backward propagation) ***/
   if (pcl_out.points.begin() == pcl_out.points.end()) return;
   auto it_pcl = pcl_out.points.end() - 1;

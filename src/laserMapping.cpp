@@ -95,7 +95,7 @@ mutex mtx_buffer;
 condition_variable sig_buffer;
 
 string root_dir = ROOT_DIR;
-string map_file_path, lid_topic, imu_topic;
+string map_file_path, lid_topic, imu_topic, cloud_deskewed_topic, odometry_topic, body_frame, odom_frame;
 
 double res_mean_last = 0.05, total_residual = 0.0;
 double last_timestamp_lidar = 0, last_timestamp_imu = -1.0;
@@ -105,7 +105,7 @@ double cube_len = 0, HALF_FOV_COS = 0, FOV_DEG = 0, total_distance = 0, lidar_en
 int    effct_feat_num = 0, time_log_counter = 0, scan_count = 0, publish_count = 0;
 int    iterCount = 0, feats_down_size = 0, NUM_MAX_ITERATIONS = 0, laserCloudValidNum = 0, pcd_save_interval = -1, pcd_index = 0;
 bool   point_selected_surf[100000] = {0};
-bool   lidar_pushed, flg_first_scan = true, flg_exit = false, flg_EKF_inited;
+bool   lidar_pushed, flg_first_scan = true, flg_exit = false, flg_EKF_inited, deskew_enabled = true;
 bool   scan_pub_en = false, dense_pub_en = false, scan_body_pub_en = false;
 
 vector<vector<int>>  pointSearchInd_surf; 
@@ -559,8 +559,8 @@ void publish_frame_world(const ros::Publisher & pubLaserCloudFull)
     {
         PointCloudXYZI::Ptr laserCloudFullRes(dense_pub_en ? feats_undistort : feats_down_body); /** if dense_pub_enb true, use feats_undistort **/
         int size = laserCloudFullRes->points.size();
-        std::cout << "size of feats_undistort: " << size << std::endl;
-        std::cout << "p_imu_process: " << &feats_undistort->points[0].x << " " << &feats_undistort->points[0].y << " " << &feats_undistort->points[0].z << std::endl;
+        // std::cout << "size of feats_undistort: " << size << std::endl;
+        // std::cout << "p_imu_process: " << &feats_undistort->points[0].x << " " << &feats_undistort->points[0].y << " " << &feats_undistort->points[0].z << std::endl;
 
 //        PointCloudXYZI::Ptr laserCloudWorld( \
 //                        new PointCloudXYZI(size, 1));
@@ -577,7 +577,7 @@ void publish_frame_world(const ros::Publisher & pubLaserCloudFull)
         sensor_msgs::PointCloud2 laserCloudmsg;
         pcl::toROSMsg(*laserRgbCloudWorld, laserCloudmsg);
         laserCloudmsg.header.stamp = ros::Time().fromSec(lidar_end_time);
-        laserCloudmsg.header.frame_id = "camera_init";
+        laserCloudmsg.header.frame_id = odom_frame;
         pubLaserCloudFull.publish(laserCloudmsg);
         publish_count -= PUBFRAME_PERIOD;
     }
@@ -649,35 +649,44 @@ void publish_frame_body(const ros::Publisher & pubLaserCloudFull_body)
     publish_count -= PUBFRAME_PERIOD;
 }
 
-//void publish_effect_world(const ros::Publisher & pubLaserCloudEffect)
-//{
-//    PointCloudXYZI::Ptr laserCloudWorld( \
-//                    new PointCloudXYZI(effct_feat_num, 1));
-//    for (int i = 0; i < effct_feat_num; i++)
-//    {
-//        IntensitypointBodyToWorld(&laserCloudOri->points[i], \
-//                            &laserCloudWorld->points[i]);
-//    }
-//    sensor_msgs::PointCloud2 laserCloudFullRes3;
-//    pcl::toROSMsg(*laserCloudWorld, laserCloudFullRes3);
-//    laserCloudFullRes3.header.stamp = ros::Time().fromSec(lidar_end_time);
-//    laserCloudFullRes3.header.frame_id = "camera_init";
-//    pubLaserCloudEffect.publish(laserCloudFullRes3);
-//}
+void publish_deskew_local(const ros::Publisher & pubLaserCloudDeskew)
+{
+   sensor_msgs::PointCloud2 laserCloudDeskew;
+   pcl::toROSMsg(*feats_undistort, laserCloudDeskew);
+   laserCloudDeskew.header.stamp = ros::Time().fromSec(lidar_end_time);
+   laserCloudDeskew.header.frame_id = "body";
+   pubLaserCloudDeskew.publish(laserCloudDeskew);
+}
+
+void publish_effect_world(const ros::Publisher & pubLaserCloudEffect)
+{
+   PointCloudXYZI::Ptr laserCloudWorld( \
+                   new PointCloudXYZI(effct_feat_num, 1));
+   for (int i = 0; i < effct_feat_num; i++)
+   {
+       IntensitypointBodyToWorld(&laserCloudOri->points[i], \
+                           &laserCloudWorld->points[i]);
+   }
+   sensor_msgs::PointCloud2 laserCloudFullRes3;
+   pcl::toROSMsg(*laserCloudWorld, laserCloudFullRes3);
+   laserCloudFullRes3.header.stamp = ros::Time().fromSec(lidar_end_time);
+   laserCloudFullRes3.header.frame_id = odom_frame;
+   pubLaserCloudEffect.publish(laserCloudFullRes3);
+}
 
 void publish_map(const ros::Publisher & pubLaserCloudMap)
 {
     sensor_msgs::PointCloud2 laserCloudMap;
     pcl::toROSMsg(*featsFromMap, laserCloudMap);
     laserCloudMap.header.stamp = ros::Time().fromSec(lidar_end_time);
-    laserCloudMap.header.frame_id = "camera_init";
+    laserCloudMap.header.frame_id = odom_frame;
     pubLaserCloudMap.publish(laserCloudMap);
 }
 
 template<typename T>
 void set_posestamp(T & out)
 {
-    cout << "-----set_posestamp-----" << endl;
+    // cout << "-----set_posestamp-----" << endl;
     out.pose.position.x = state_point.pos(0);
     out.pose.position.y = state_point.pos(1);
     out.pose.position.z = state_point.pos(2);
@@ -689,9 +698,9 @@ void set_posestamp(T & out)
 
 void publish_odometry(const ros::Publisher & pubOdomAftMapped)
 {
-    cout << "-----publish_odometry-----" << endl;
-    odomAftMapped.header.frame_id = "camera_init";
-    odomAftMapped.child_frame_id = "body";
+    // cout << "-----publish_odometry-----" << endl;
+    odomAftMapped.header.frame_id = odom_frame;
+    odomAftMapped.child_frame_id = body_frame;
     odomAftMapped.header.stamp = ros::Time().fromSec(lidar_end_time);// ros::Time().fromSec(lidar_end_time);
     set_posestamp(odomAftMapped.pose);
     pubOdomAftMapped.publish(odomAftMapped);
@@ -718,15 +727,15 @@ void publish_odometry(const ros::Publisher & pubOdomAftMapped)
     q.setY(odomAftMapped.pose.pose.orientation.y);
     q.setZ(odomAftMapped.pose.pose.orientation.z);
     transform.setRotation( q );
-    br.sendTransform( tf::StampedTransform( transform, odomAftMapped.header.stamp, "camera_init", "body" ) );
+    br.sendTransform( tf::StampedTransform( transform, odomAftMapped.header.stamp, odom_frame, body_frame ) );
 }
 
 void publish_path(const ros::Publisher pubPath)
 {
-    cout << "-----publish_path-----" << endl;
+    // cout << "-----publish_path-----" << endl;
     set_posestamp(msg_body_pose);
     msg_body_pose.header.stamp = ros::Time().fromSec(lidar_end_time);
-    msg_body_pose.header.frame_id = "camera_init";
+    msg_body_pose.header.frame_id = odom_frame;
 
     /*** if path is too large, the rviz will crash ***/
 //    static int jjj = 0;
@@ -866,9 +875,13 @@ int main(int argc, char** argv)
     nh.param<bool>("publish/dense_publish_en",dense_pub_en, true);
     nh.param<bool>("publish/scan_bodyframe_pub_en",scan_body_pub_en, true);
     nh.param<int>("max_iteration",NUM_MAX_ITERATIONS,4);
+    nh.param<string>("odom_frame", odom_frame,"odom");
+    nh.param<string>("body_frame", body_frame,"lidar_link");
     nh.param<string>("map_file_path",map_file_path,"");
     nh.param<string>("common/lid_topic",lid_topic,"/livox/lidar");
     nh.param<string>("common/imu_topic", imu_topic,"/livox/imu");
+    nh.param<string>("common/cloud_deskewed_topic",cloud_deskewed_topic,"/cloud_deskewed");
+    nh.param<string>("common/odometry_topic", odometry_topic,"/odometry");
     nh.param<bool>("common/time_sync_en", time_sync_en, false);
     nh.param<double>("filter_size_corner",filter_size_corner_min,0.5);
     nh.param<double>("filter_size_surf",filter_size_surf_min,0.5);
@@ -887,16 +900,20 @@ int main(int argc, char** argv)
     nh.param<int>("preprocess/scan_rate", p_pre->SCAN_RATE, 10);
     nh.param<int>("point_filter_num", p_pre->point_filter_num, 2);
     nh.param<bool>("feature_extract_enable", p_pre->feature_enabled, false);
+    nh.param<bool>("deskew_enabled", deskew_enabled, true);
     nh.param<bool>("runtime_pos_log_enable", runtime_pos_log, 0);
     nh.param<bool>("mapping/extrinsic_est_en", extrinsic_est_en, true);
     nh.param<bool>("pcd_save/pcd_save_en", pcd_save_en, false);
     nh.param<int>("pcd_save/interval", pcd_save_interval, -1);
     nh.param<vector<double>>("mapping/extrinsic_T", extrinT, vector<double>());
     nh.param<vector<double>>("mapping/extrinsic_R", extrinR, vector<double>());
-    cout<<"p_pre->lidar_type "<<p_pre->lidar_type<<endl;
+    cout<<"p_pre->lidar_type "<< p_pre->lidar_type <<endl;
+    cout<<"deskew_enabled "<< deskew_enabled <<endl;
+    cout<<"feature_extract_enable "<< p_pre->feature_enabled <<endl;
+    cout<<"point_filter_num "<< p_pre->point_filter_num <<endl;
     
     path.header.stamp    = ros::Time::now();
-    path.header.frame_id ="camera_init";
+    path.header.frame_id = odom_frame;
 
     /*** variables definition ***/
     int effect_feat_num = 0, frame_num = 0;
@@ -917,6 +934,7 @@ int main(int argc, char** argv)
 
     Lidar_T_wrt_IMU<<VEC_FROM_ARRAY(extrinT);
     Lidar_R_wrt_IMU<<MAT_FROM_ARRAY(extrinR);
+    p_imu->set_deskew(deskew_enabled);
     p_imu->set_extrinsic(Lidar_T_wrt_IMU, Lidar_R_wrt_IMU);
     p_imu->set_gyr_cov(V3D(gyr_cov, gyr_cov, gyr_cov));
     p_imu->set_acc_cov(V3D(acc_cov, acc_cov, acc_cov));
@@ -951,17 +969,19 @@ int main(int argc, char** argv)
     image_transport::Subscriber sub_img = it.subscribe("camera/image_raw", 200000, img_cbk);
 
     ros::Publisher pubLaserCloudFull = nh.advertise<sensor_msgs::PointCloud2>
-            ("/cloud_registered", 100000); /** active **/
+            ("cloud_registered", 100000); /** active **/
     ros::Publisher pubLaserCloudFull_body = nh.advertise<sensor_msgs::PointCloud2>
-            ("/cloud_registered_body", 100000);
+            ("cloud_registered_body", 100000);
     ros::Publisher pubLaserCloudEffect = nh.advertise<sensor_msgs::PointCloud2>
-            ("/cloud_effected", 100000);
+            ("cloud_effected", 100000);
+    ros::Publisher pubLaserCloudDeskew = nh.advertise<sensor_msgs::PointCloud2>
+            (cloud_deskewed_topic, 100000);
     ros::Publisher pubLaserCloudMap = nh.advertise<sensor_msgs::PointCloud2>
-            ("/Laser_map", 100000);
+            ("Laser_map", 100000);
     ros::Publisher pubOdomAftMapped = nh.advertise<nav_msgs::Odometry> 
-            ("/Odometry", 100000);
+            (odometry_topic, 100000);
     ros::Publisher pubPath          = nh.advertise<nav_msgs::Path> 
-            ("/path", 100000);
+            ("path", 100000);
 //------------------------------------------------------------------------------------------------------
     static int count; /** count of the publish func **/
     signal(SIGINT, SigHandle);
@@ -1088,16 +1108,17 @@ int main(int argc, char** argv)
                 count ++;
                 if (count % 10 == 0) {
                     pubPath.publish(path);
-                    cout << msg_body_pose.header.stamp << endl;
-                    cout << path.poses.at(path.poses.size() - 1).pose.position.x << endl;
-                    cout << path.poses[path.poses.size() - 1].pose.orientation.x << endl;
-                    cout << msg_body_pose.pose.position.x << endl;
-                    cout << msg_body_pose.pose.orientation.x << endl;
+                    cout << "path_stamp:" << msg_body_pose.header.stamp << endl;
+                    cout << "path_pose:" <<  path.poses.at(path.poses.size() - 1).pose.position.x << endl;
+                    cout << "path_pose:" <<  path.poses[path.poses.size() - 1].pose.orientation.x << endl;
+                    cout << "path_pose:" <<  msg_body_pose.pose.position.x << endl;
+                    cout << "path_pose:" <<  msg_body_pose.pose.orientation.x << endl;
                 }
             }
             if (scan_pub_en || pcd_save_en)      publish_frame_world(pubLaserCloudFull);
             if (scan_pub_en && scan_body_pub_en) publish_frame_body(pubLaserCloudFull_body);
             // publish_effect_world(pubLaserCloudEffect);
+            publish_deskew_local(pubLaserCloudDeskew);
             // publish_map(pubLaserCloudMap);
 
             /*** Debug variables ***/

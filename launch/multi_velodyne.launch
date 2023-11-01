@@ -1,0 +1,33 @@
+<launch>
+    <arg name="project" default="fast_lio" />
+    <arg name="robot_namespace"   default="jackal0" />
+    <!-- <arg name="id1"     default="jackal1"> -->
+
+  <!-- Launch file for velodyne16 VLP-16 LiDAR -->
+
+    <node pkg="tf" type="static_transform_publisher" name="world_to_$(arg robot_namespace)_map" args="0 0 0 0 0 0 world $(arg robot_namespace)/map 1" />
+
+    <node pkg="tf" type="static_transform_publisher" name="world_to_$(arg robot_namespace)_odom" args="0 0 0 0 0 0 $(arg robot_namespace)/map $(arg robot_namespace)/odom 1" />
+    <node pkg="tf" type="static_transform_publisher" name="world_to_$(arg robot_namespace)_camera_init" args="0 0 0 0 0 0 $(arg robot_namespace)/odom camera_init 1" />
+
+    <group ns="$(arg robot_namespace)">  
+        <rosparam command="load" file="$(find fast_lio)/config/velodyne_mr.yaml" />
+        <param name="feature_extract_enable" type="bool" value="0"/>
+        <param name="deskew_enabled" type="bool" value="0"/> 
+        <param name="point_filter_num" type="int" value="1"/> <!--最好不能整除16，因为会丢线，使扫描点变得极不均匀-->
+        <param name="max_iteration" type="int" value="3" />
+        <param name="filter_size_surf" type="double" value="0.5" />
+        <param name="filter_size_map" type="double" value="0.5" />
+        <param name="cube_side_length" type="double" value="1000" />
+        <param name="runtime_pos_log_enable" type="bool" value="0" />
+        <node pkg="$(arg project)" type="fastlio_mapping" name="laserMapping" output="screen" /> 
+       <!-- <node launch-prefix="nice" pkg="rviz" type="rviz" name="rviz" args="-d $(find fast_lio)/rviz_cfg/loam_livox_mr.rviz" /> -->
+    </group>
+
+
+
+    <!-- <group ns="$(arg robot_namespace)">  
+        <include file="$(find fast_lio)/launch/mapping_velodyne.launch" />
+    </group> -->
+
+</launch>

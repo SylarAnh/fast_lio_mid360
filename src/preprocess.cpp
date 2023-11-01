@@ -323,6 +323,7 @@ void Preprocess::velodyne_handler(const sensor_msgs::PointCloud2::ConstPtr &msg)
     {
       given_offset_time = false;
       double yaw_first = atan2(pl_orig.points[0].y, pl_orig.points[0].x) * 57.29578;
+      // std::cout << "yaw_first: " << yaw_first << std::endl;
       double yaw_end  = yaw_first;
       int layer_first = pl_orig.points[0].ring;
       for (uint i = plsize - 1; i > 0; i--)
@@ -412,10 +413,10 @@ void Preprocess::velodyne_handler(const sensor_msgs::PointCloud2::ConstPtr &msg)
     }
     else
     {
+      // cout<<"!!!!!!" << plsize<<endl;
       for (int i = 0; i < plsize; i++)
       {
         PointType added_pt;
-        // cout<<"!!!!!!"<<i<<" "<<plsize<<endl;
         
         added_pt.normal_x = 0;
         added_pt.normal_y = 0;
